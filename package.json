@@ -1,0 +1,7 @@
+{
+  "name": "meta-ad-uploader",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "One-click Meta ad uploader: Notion board -> n8n -> Vercel functions -> paused Meta ads."
+}

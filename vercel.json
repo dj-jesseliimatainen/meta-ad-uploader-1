@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/prepare-media.js": { "maxDuration": 300 },
+    "api/check-media.js": { "maxDuration": 60 },
+    "api/build-concept.js": { "maxDuration": 300 }
+  }
+}

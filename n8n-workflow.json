@@ -1,0 +1,294 @@
+{
+  "name": "Meta Ad Uploader",
+  "nodes": [
+    {
+      "id": "webhook",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 300],
+      "parameters": { "httpMethod": "POST", "path": "meta-ad-uploader", "responseMode": "onReceived", "options": {} },
+      "webhookId": "46ef6ea4-46b2-4456-b1b1-9a67b70a6915",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "parse",
+      "name": "Parse Trigger",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [200, 300],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const input = $input.first().json;\nconst b = input.body || input;\nconst raw = (b.data && b.data.id) || b.id || b.pageId || (b.source && b.source.id) || ((input.query || {}).pageId) || '';\nconst pageId = String(raw).trim();\nif (!pageId) { throw new Error('No Notion page id in webhook payload (checked body.data.id, body.id, body.pageId, query.pageId)'); }\n// TODO set these to YOUR Vercel deployment base URL:\nreturn [{ json: { pageId, prepareUrl: 'https://YOUR-PROJECT.vercel.app/api/prepare-media', buildUrl: 'https://YOUR-PROJECT.vercel.app/api/build-concept' } }];"
+      }
+    },
+    {
+      "id": "readpage",
+      "name": "Read Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [400, 300],
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.notion.com/v1/pages/{{ $json.pageId }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionApi",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": { "parameters": [{ "name": "Notion-Version", "value": "2022-06-28" }] },
+        "options": {}
+      }
+    },
+    {
+      "id": "extract",
+      "name": "Extract + Guard",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [600, 300],
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// FIELD MAP — change the right-hand-side strings to match YOUR Notion column names.\nconst FIELD = {\n  uploadStatus: 'Upload Status',\n  adName:       'Ad Name',\n  adsetName:    'Adset Name',\n  identity:     'Identity',\n  targetUrl:    'Target URL',\n  primaryText:  'Primary Text',\n  headline:     'Headline',\n  outputLink:   'Output Link',\n  variations:   'Variations',\n};\nconst page = $input.first().json;\nconst props = (page && page.properties) || {};\nconst sel = (p) => (props[p] && props[p].select ? props[p].select.name : '');\nconst rt = (p) => (props[p] && Array.isArray(props[p].rich_text) ? props[p].rich_text.map((t) => t.plain_text).join('') : '');\nconst formula = (p) => { const f = props[p] && props[p].formula; if (!f) return ''; return f.string != null ? f.string : (f.number != null ? String(f.number) : ''); };\nconst urlp = (p) => (props[p] ? (props[p].url || '') : '');\nconst num = (p) => (props[p] && typeof props[p].number === 'number' ? props[p].number : null);\nconst cfg = $('Parse Trigger').first().json;\nconst uploadStatus = sel(FIELD.uploadStatus);\nreturn [{ json: {\n  pageId: cfg.pageId,\n  prepareUrl: cfg.prepareUrl,\n  buildUrl: cfg.buildUrl,\n  uploadStatus,\n  alreadyDone: uploadStatus === 'Done',\n  adNameBase: formula(FIELD.adName),\n  adSetNameBase: formula(FIELD.adsetName),\n  identityKey: sel(FIELD.identity),\n  targetUrl: urlp(FIELD.targetUrl),\n  primaryText: rt(FIELD.primaryText),\n  headline: rt(FIELD.headline),\n  outputLink: urlp(FIELD.outputLink),\n  variations: num(FIELD.variations),\n} }];"
+      }
+    },
+    {
+      "id": "ifdone",
+      "name": "If Already Done",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [800, 300],
+      "parameters": {
+        "conditions": {
+          "options": { "version": 2, "leftValue": "", "caseSensitive": true, "typeValidation": "loose" },
+          "combinator": "and",
+          "conditions": [{ "id": "c1", "operator": { "type": "boolean", "operation": "true", "singleValue": true }, "leftValue": "={{ $json.alreadyDone }}", "rightValue": "" }]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "setuploading",
+      "name": "Set Uploading",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1020, 380],
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://api.notion.com/v1/pages/{{ $json.pageId }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionApi",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": { "parameters": [{ "name": "Notion-Version", "value": "2022-06-28" }, { "name": "Content-Type", "value": "application/json" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ properties: { 'Upload Status': { select: { name: 'Uploading' } }, 'Upload Log': { rich_text: [{ text: { content: 'Uploading…' } }] } } }) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "prepare",
+      "name": "Prepare Media",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1220, 380],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Extract + Guard').first().json.prepareUrl }}",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": { "parameters": [{ "name": "Content-Type", "value": "application/json" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ outputLink: $('Extract + Guard').first().json.outputLink, variationsExpected: $('Extract + Guard').first().json.variations, identityKey: $('Extract + Guard').first().json.identityKey }) }}",
+        "options": { "timeout": 280000 }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "continueOnFail": true
+    },
+    {
+      "id": "ifprepare",
+      "name": "If Prepare OK",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [1420, 380],
+      "parameters": {
+        "conditions": {
+          "options": { "version": 2, "leftValue": "", "caseSensitive": true, "typeValidation": "loose" },
+          "combinator": "and",
+          "conditions": [{ "id": "p1", "operator": { "type": "boolean", "operation": "true", "singleValue": true }, "leftValue": "={{ $json.ok }}", "rightValue": "" }]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "checkmedia",
+      "name": "Check Media",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1620, 480],
+      "parameters": {
+        "method": "POST",
+        "url": "https://YOUR-PROJECT.vercel.app/api/check-media",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": { "parameters": [{ "name": "Content-Type", "value": "application/json" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ videoIds: $('Prepare Media').first().json.needsPolling }) }}",
+        "options": { "timeout": 30000 }
+      }
+    },
+    {
+      "id": "ifready",
+      "name": "If Videos Ready",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [1820, 480],
+      "parameters": {
+        "conditions": {
+          "options": { "version": 2, "leftValue": "", "caseSensitive": true, "typeValidation": "loose" },
+          "combinator": "and",
+          "conditions": [{ "id": "r1", "operator": { "type": "boolean", "operation": "true", "singleValue": true }, "leftValue": "={{ $json.ready }}", "rightValue": "" }]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "ifgiveup",
+      "name": "If Give Up",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [2040, 560],
+      "parameters": {
+        "conditions": {
+          "options": { "version": 2, "leftValue": "", "caseSensitive": true, "typeValidation": "loose" },
+          "combinator": "and",
+          "conditions": [{ "id": "g1", "operator": { "type": "boolean", "operation": "true", "singleValue": true }, "leftValue": "={{ $json.hardError || ($now.toMillis() > $('Prepare Media').first().json.deadline) }}", "rightValue": "" }]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "waitvideos",
+      "name": "Wait Videos",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [1820, 640],
+      "parameters": { "amount": 90, "unit": "seconds" },
+      "webhookId": "14b422ad-0d68-4c1d-89f8-6fba6fd70521"
+    },
+    {
+      "id": "build",
+      "name": "Build Concept",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1620, 300],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Extract + Guard').first().json.buildUrl }}",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": { "parameters": [{ "name": "Content-Type", "value": "application/json" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ adNameBase: $('Extract + Guard').first().json.adNameBase, adSetNameBase: $('Extract + Guard').first().json.adSetNameBase, identityKey: $('Extract + Guard').first().json.identityKey, targetUrl: $('Extract + Guard').first().json.targetUrl, primaryText: $('Extract + Guard').first().json.primaryText, headline: $('Extract + Guard').first().json.headline, variations: $('Prepare Media').first().json.media }) }}",
+        "options": { "timeout": 280000 }
+      },
+      "continueOnFail": true
+    },
+    {
+      "id": "ifbuild",
+      "name": "If Build OK",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [1820, 300],
+      "parameters": {
+        "conditions": {
+          "options": { "version": 2, "leftValue": "", "caseSensitive": true, "typeValidation": "loose" },
+          "combinator": "and",
+          "conditions": [{ "id": "b1", "operator": { "type": "boolean", "operation": "true", "singleValue": true }, "leftValue": "={{ $json.ok }}", "rightValue": "" }]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "writedone",
+      "name": "Write Done",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2040, 220],
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://api.notion.com/v1/pages/{{ $('Extract + Guard').first().json.pageId }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionApi",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": { "parameters": [{ "name": "Notion-Version", "value": "2022-06-28" }, { "name": "Content-Type", "value": "application/json" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ properties: { 'Upload Status': { select: { name: 'Done' } }, 'Created IDs': { rich_text: [{ text: { content: JSON.stringify($('Build Concept').first().json.result || {}).substring(0, 1900) } }] }, 'Upload Log': { rich_text: [{ text: { content: 'Success ✓ ' + $now.toISO() } }] } } }) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "writeerrprepare",
+      "name": "Write Error - Prepare",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1620, 700],
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://api.notion.com/v1/pages/{{ $('Extract + Guard').first().json.pageId }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionApi",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": { "parameters": [{ "name": "Notion-Version", "value": "2022-06-28" }, { "name": "Content-Type", "value": "application/json" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ properties: { 'Upload Status': { select: { name: 'Error' } }, 'Upload Log': { rich_text: [{ text: { content: ('Media prep failed at ' + ($('Prepare Media').first().json.failedStep || '?') + ': ' + ($('Prepare Media').first().json.message || (($('Prepare Media').first().json.ready === false) ? 'videos still processing' : 'unknown error'))).substring(0, 1900) } }] } } }) }}",
+        "options": {}
+      }
+    },
+    {
+      "id": "writeerrbuild",
+      "name": "Write Error - Build",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2040, 420],
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://api.notion.com/v1/pages/{{ $('Extract + Guard').first().json.pageId }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "notionApi",
+        "sendHeaders": true,
+        "specifyHeaders": "keypair",
+        "headerParameters": { "parameters": [{ "name": "Notion-Version", "value": "2022-06-28" }, { "name": "Content-Type", "value": "application/json" }] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ properties: { 'Upload Status': { select: { name: 'Error' } }, 'Created IDs': { rich_text: [{ text: { content: JSON.stringify(($('Build Concept').first().json.partial) || {}).substring(0, 1900) } }] }, 'Upload Log': { rich_text: [{ text: { content: ('Build failed at ' + ($('Build Concept').first().json.failedStep || '?') + ' [fbCode ' + ($('Build Concept').first().json.fbCode || '?') + ']: ' + ($('Build Concept').first().json.message || 'unknown error')).substring(0, 1900) } }] } } }) }}",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Webhook": { "main": [[{ "node": "Parse Trigger", "type": "main", "index": 0 }]] },
+    "Parse Trigger": { "main": [[{ "node": "Read Page", "type": "main", "index": 0 }]] },
+    "Read Page": { "main": [[{ "node": "Extract + Guard", "type": "main", "index": 0 }]] },
+    "Extract + Guard": { "main": [[{ "node": "If Already Done", "type": "main", "index": 0 }]] },
+    "If Already Done": { "main": [[], [{ "node": "Set Uploading", "type": "main", "index": 0 }]] },
+    "Set Uploading": { "main": [[{ "node": "Prepare Media", "type": "main", "index": 0 }]] },
+    "Prepare Media": { "main": [[{ "node": "If Prepare OK", "type": "main", "index": 0 }]] },
+    "If Prepare OK": { "main": [[{ "node": "Check Media", "type": "main", "index": 0 }], [{ "node": "Write Error - Prepare", "type": "main", "index": 0 }]] },
+    "Check Media": { "main": [[{ "node": "If Videos Ready", "type": "main", "index": 0 }]] },
+    "If Videos Ready": { "main": [[{ "node": "Build Concept", "type": "main", "index": 0 }], [{ "node": "If Give Up", "type": "main", "index": 0 }]] },
+    "If Give Up": { "main": [[{ "node": "Write Error - Prepare", "type": "main", "index": 0 }], [{ "node": "Wait Videos", "type": "main", "index": 0 }]] },
+    "Wait Videos": { "main": [[{ "node": "Check Media", "type": "main", "index": 0 }]] },
+    "Build Concept": { "main": [[{ "node": "If Build OK", "type": "main", "index": 0 }]] },
+    "If Build OK": { "main": [[{ "node": "Write Done", "type": "main", "index": 0 }], [{ "node": "Write Error - Build", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1", "saveDataErrorExecution": "all", "saveDataSuccessExecution": "all", "saveManualExecutions": true }
+}
